@@ -105,7 +105,7 @@ class EpisodeWriter:
         table = pa.table(
             {
                 "timestamp": pa.array(timestamps, type=pa.timestamp("ns")),
-                "position": pa.array(positions, type=list_type),
+                "value": pa.array(positions, type=list_type),
             }
         )
         pq.write_table(table, output_path)
