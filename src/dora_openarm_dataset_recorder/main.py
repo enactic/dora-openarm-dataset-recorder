@@ -45,6 +45,12 @@ class Episode:
     left_actions: ArrayLike = field(default_factory=list)
     left_observation_timestamps: ArrayLike = field(default_factory=list)
     left_observations: ArrayLike = field(default_factory=list)
+    joystick_x_timestamps: ArrayLike = field(default_factory=list)
+    joystick_xs: ArrayLike = field(default_factory=list)
+    joystick_y_timestamps: ArrayLike = field(default_factory=list)
+    joystick_ys: ArrayLike = field(default_factory=list)
+    joystick_button_timestamps: ArrayLike = field(default_factory=list)
+    joystick_buttons: ArrayLike = field(default_factory=list)
 
 
 class EpisodeWriter:
@@ -94,6 +100,24 @@ class EpisodeWriter:
                 self._episode.left_observation_timestamps,
                 self._episode.left_observations,
             )
+        if self._episode.joystick_xs:
+            self._write_joystick_values(
+                self._base_directory / "action" / "joystick" / "x.parquet",
+                self._episode.joystick_x_timestamps,
+                self._episode.joystick_xs,
+            )
+        if self._episode.joystick_ys:
+            self._write_joystick_values(
+                self._base_directory / "action" / "joystick" / "y.parquet",
+                self._episode.joystick_y_timestamps,
+                self._episode.joystick_ys,
+            )
+        if self._episode.joystick_buttons:
+            self._write_joystick_values(
+                self._base_directory / "action" / "joystick" / "button.parquet",
+                self._episode.joystick_button_timestamps,
+                self._episode.joystick_buttons,
+            )
 
     def cancel(self):
         """Cancel this episode."""
@@ -106,6 +130,16 @@ class EpisodeWriter:
             {
                 "timestamp": pa.array(timestamps, type=pa.timestamp("ns")),
                 "value": pa.array(positions, type=list_type),
+            }
+        )
+        pq.write_table(table, output_path)
+
+    def _write_joystick_values(self, output_path, timestamps, values):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        table = pa.table(
+            {
+                "timestamp": pa.array(timestamps, type=pa.timestamp("ns")),
+                "value": pa.concat_arrays(values),
             }
         )
         pq.write_table(table, output_path)
@@ -196,6 +230,7 @@ def _collect_dynamic_metadata(metadata, args, node):
     metadata["frequencies"] = {
         "action": {
             "arms": {},
+            "joystick": {},
         },
         "obs": {
             "arms": {},
@@ -213,6 +248,9 @@ def _collect_dynamic_metadata(metadata, args, node):
             if type == "observation":
                 type = "obs"
             metadata["frequencies"][type]["arms"][side] = frequency
+        elif name.startswith("joystick_"):
+            target = name.split("_", 1)[1]
+            metadata["frequencies"]["joystick"][target] = frequency
         elif name.startswith("camera_"):
             # camera_wrist_right -> wrist_right
             camera_name = name.removeprefix("camera_")
@@ -329,6 +367,15 @@ def main():
             image = event["value"]
             format = event["metadata"]["encoding"]
             episode_writer.write_camera_image(name, image, timestamp, format)
+        elif event_id.startswith("joystick_"):
+            # joystick_x ->
+            # joystick_xs
+            values_key = f"{event_id}s"
+            getattr(episode, values_key).append(event["value"])
+            # joystick_x ->
+            # joystick_x_timestamps
+            timestamps_key = f"{event_id}_timestamps"
+            getattr(episode, timestamps_key).append(timestamp)
 
 
 if __name__ == "__main__":
