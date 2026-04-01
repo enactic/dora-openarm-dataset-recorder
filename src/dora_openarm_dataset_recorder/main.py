@@ -112,15 +112,15 @@ class EpisodeWriter:
 
 
 class DatasetWriter:
-    """Writer a dataset."""
+    """Write a dataset."""
 
     _VERSION = "0.1.0"
 
-    def __init__(self, directory, name, metadata_template):
+    def __init__(self, directory, name, metadata):
         """Initialize variables."""
         self._directory = directory
         self._name = name
-        self._metadata_template = metadata_template or {}
+        self._metadata = metadata
         self._base_directory = self._directory / name
         self._episode_results = []
         shutil.rmtree(self._base_directory, ignore_errors=True)
@@ -142,7 +142,7 @@ class DatasetWriter:
         self._write_metadata_file()
 
     def _write_metadata_file(self):
-        metadata = copy.deepcopy(self._metadata_template)
+        metadata = copy.deepcopy(self._metadata)
         metadata["version"] = self._VERSION
         metadata["episodes"] = self._episode_results
         output_path = self._base_directory / "metadata.yaml"
@@ -179,12 +179,21 @@ class FrequencyDetector:
                 return self.detect(next_input)
 
 
-def _collect_dynamic_metadata(metadata_template, node):
-    docker_image = os.getenv("IMAGE")
-    if docker_image:
-        metadata_template["docker_image"] = docker_image
+def _collect_dynamic_metadata(metadata, args, node):
+    metadata["operation_type"] = args.operation_type
+    if args.operation_type == "teleop":
+        if "equipment" not in metadata:
+            metadata["equipment"] = {}
+        if "embodiments" not in metadata["equipment"]:
+            metadata["equipment"]["embodiments"] = {}
+        # TODO: Set equipment.embodiments.ker here or in DatasetWriter.
+    elif args.operation_type == "rollout":
+        if "model" not in metadata:
+            metadata["model"] = {}
+        if args.docker_image:
+            metadata["model"]["docker_image"] = args.docker_image
 
-    metadata_template["frequencies"] = {
+    metadata["frequencies"] = {
         "action": {
             "arms": {},
         },
@@ -203,11 +212,11 @@ def _collect_dynamic_metadata(metadata_template, node):
             side, type = name.split("_")[1:3]
             if type == "observation":
                 type = "obs"
-            metadata_template["frequencies"][type]["arms"][side] = frequency
+            metadata["frequencies"][type]["arms"][side] = frequency
         elif name.startswith("camera_"):
             # camera_wrist_right -> wrist_right
             camera_name = name.removeprefix("camera_")
-            metadata_template["frequencies"]["cameras"][camera_name] = frequency
+            metadata["frequencies"]["cameras"][camera_name] = frequency
 
 
 def main():
@@ -220,9 +229,9 @@ def main():
         type=pathlib.Path,
     )
     parser.add_argument(
-        "--name",
-        default=os.getenv("NAME", "dataset"),
-        help="The dataset name",
+        "--docker-image",
+        default=os.getenv("DOCKER_IMAGE", os.getenv("IMAGE")),
+        help="The Docker image used for this rollout",
         type=str,
     )
     parser.add_argument(
@@ -231,16 +240,29 @@ def main():
         help="The metadata file",
         type=pathlib.Path,
     )
+    parser.add_argument(
+        "--name",
+        default=os.getenv("NAME", "dataset"),
+        help="The dataset name",
+        type=str,
+    )
+    parser.add_argument(
+        "--operation-type",
+        choices=["teleop", "rollout"],
+        default=os.getenv("OPERATION_TYPE", "teleop"),
+        help="The operation type",
+        type=str,
+    )
     args = parser.parse_args()
 
     node = dora.Node()
     if args.metadata_file is None:
-        metadata_template = {}
+        metadata = {}
     else:
         with open(args.metadata_file, encoding="utf-8") as f:
-            metadata_template = yaml.safe_load(f)
-    _collect_dynamic_metadata(metadata_template, node)
-    dataset_writer = DatasetWriter(args.directory, args.name, metadata_template)
+            metadata = yaml.safe_load(f)
+    _collect_dynamic_metadata(metadata, args, node)
+    dataset_writer = DatasetWriter(args.directory, args.name, metadata)
     episode = None
     episode_writer = None
 
