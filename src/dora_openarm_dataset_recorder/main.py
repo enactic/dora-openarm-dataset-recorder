@@ -349,9 +349,8 @@ def main():
         elif event_id.startswith("elevation_"):
             # elevation_observation -> elevation_observations, elevation_observation_timestamps
             # elevation_action -> elevation_actions, elevation_action_timestamps
-            key = event_id.removeprefix("elevation_")
-            getattr(episode, f"elevation_{key}s").append(event["value"])
-            getattr(episode, f"elevation_{key}_timestamps").append(timestamp)
+            getattr(episode, f"{event_id}s").append(event["value"])
+            getattr(episode, f"{event_id}_timestamps").append(timestamp)
         elif event_id.startswith("camera_"):
             name = event_id.removeprefix("camera_")
             image = event["value"]
