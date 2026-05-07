@@ -15,13 +15,17 @@
 name: Lint
 on:
   push:
+    branches:
+      - '**'
+      - '!copilot/**'
+    tags:
+      - '**'
   pull_request:
 concurrency:
   group: ${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 jobs:
   pre-commit:
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/copilot/')
     name: pre-commit
     runs-on: ubuntu-latest
     steps:
