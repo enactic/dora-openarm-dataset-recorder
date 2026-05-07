@@ -21,6 +21,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   pre-commit:
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/copilot/')
     name: pre-commit
     runs-on: ubuntu-latest
     steps:

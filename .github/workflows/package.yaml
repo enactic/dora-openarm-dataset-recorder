@@ -26,6 +26,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   source:
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/copilot/')
     name: Source
     runs-on: ubuntu-latest
     timeout-minutes: 10
