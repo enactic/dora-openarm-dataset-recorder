@@ -15,9 +15,8 @@
 name: Lint
 on:
   push:
-    branches:
-      - '**'
-      - '!copilot/**'
+    branches-ignore:
+      - 'copilot/**'
     tags:
       - '**'
   pull_request:
