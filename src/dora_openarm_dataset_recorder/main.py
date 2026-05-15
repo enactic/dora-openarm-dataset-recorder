@@ -102,7 +102,7 @@ class EpisodeWriter:
             self._write_positions(
                 self._base_directory
                 / "action"
-                / "torso"
+                / "lifter"
                 / "lift"
                 / "elevation.parquet",
                 self._episode.elevation_action_timestamps,
@@ -110,7 +110,7 @@ class EpisodeWriter:
             )
         if self._episode.elevation_observations:
             self._write_positions(
-                self._base_directory / "obs" / "torso" / "lift" / "elevation.parquet",
+                self._base_directory / "obs" / "lifter" / "lift" / "elevation.parquet",
                 self._episode.elevation_observation_timestamps,
                 self._episode.elevation_observations,
             )
