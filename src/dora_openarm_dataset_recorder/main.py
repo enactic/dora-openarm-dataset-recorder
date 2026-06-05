@@ -179,7 +179,8 @@ class DatasetWriter:
                             for k, v in mismatched.items()
                         )
                     )
-        self._base_directory.mkdir(parents=True, exist_ok=True)
+        else:
+            self._base_directory.mkdir(parents=True)
 
     def create_episode_writer(self, episode):
         """Create a writer for the given episode."""
