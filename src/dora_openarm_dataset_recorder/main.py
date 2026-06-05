@@ -166,7 +166,11 @@ class DatasetWriter:
         if self._base_directory.exists():
             existing = self._read_existing_metadata()
             if existing is not None:
-                mismatched = {k: v for k, v in self._metadata.items() if k in existing and existing[k] != v}
+                mismatched = {
+                    k: v
+                    for k, v in self._metadata.items()
+                    if k in existing and existing[k] != v
+                }
                 if mismatched:
                     raise ValueError(
                         f"Existing dataset metadata does not match: {self._base_directory / 'metadata.yaml'}\n"
