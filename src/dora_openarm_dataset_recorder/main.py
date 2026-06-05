@@ -163,11 +163,33 @@ class DatasetWriter:
         self._metadata = metadata
         self._base_directory = self._directory / name
         self._episode_results = []
-        shutil.rmtree(self._base_directory, ignore_errors=True)
-        self._base_directory.mkdir(parents=True)
+        if self._base_directory.exists():
+            existing = self._read_existing_metadata()
+            if existing is not None:
+                mismatched = {
+                    k: v
+                    for k, v in self._metadata.items()
+                    if k in existing and existing[k] != v
+                }
+                if mismatched:
+                    raise ValueError(
+                        f"Existing dataset metadata does not match: {self._base_directory / 'metadata.yaml'}\n"
+                        + "\n".join(
+                            f"  {k}: existing={existing.get(k)!r}, current={v!r}"
+                            for k, v in mismatched.items()
+                        )
+                    )
+        else:
+            self._base_directory.mkdir(parents=True)
 
     def create_episode_writer(self, episode):
         """Create a writer for the given episode."""
+        episode_id = str(episode.number)
+        if episode_id in {result["id"] for result in self._episode_results}:
+            raise ValueError(f"Episode {episode_id} already exists in dataset")
+        episode_directory = self._base_directory / "episodes" / episode_id
+        if episode_directory.exists():
+            raise ValueError(f"Episode directory already exists: {episode_directory}")
         return EpisodeWriter(self._base_directory, episode)
 
     def finish_episode(self, episode):
@@ -188,6 +210,15 @@ class DatasetWriter:
         output_path = self._base_directory / "metadata.yaml"
         with open(output_path, "w", encoding="utf-8") as f:
             yaml.dump(metadata, f, default_flow_style=False, allow_unicode=True)
+
+    def _read_existing_metadata(self):
+        metadata_path = self._base_directory / "metadata.yaml"
+        if not metadata_path.exists():
+            return None
+        with open(metadata_path, encoding="utf-8") as f:
+            existing_metadata = yaml.safe_load(f) or {}
+        self._episode_results = existing_metadata.get("episodes", [])
+        return existing_metadata
 
 
 class FrequencyDetector:
