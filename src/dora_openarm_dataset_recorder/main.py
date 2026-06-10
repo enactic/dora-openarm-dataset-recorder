@@ -182,6 +182,13 @@ class DatasetWriter:
         else:
             self._base_directory.mkdir(parents=True)
 
+    @property
+    def next_episode_number(self):
+        """Return the next available episode number."""
+        if not self._episode_results:
+            return 0
+        return max(int(result["id"]) for result in self._episode_results) + 1
+
     def create_episode_writer(self, episode):
         """Create a writer for the given episode."""
         episode_id = str(episode.number)
@@ -191,6 +198,7 @@ class DatasetWriter:
         if episode_directory.exists():
             raise ValueError(f"Episode directory already exists: {episode_directory}")
         return EpisodeWriter(self._base_directory, episode)
+
 
     def finish_episode(self, episode):
         """Add a finished episode to the writer."""
@@ -352,7 +360,7 @@ def main():
             command = event["value"][0].as_py()
             if command == "start":
                 episode = Episode()
-                episode.number = event["metadata"].get("episode_number", 0)
+                episode.number = event["metadata"].get("episode_number", dataset_writer.next_episode_number)
                 episode.task_index = event["metadata"].get("task_index", 0)
                 episode_writer = dataset_writer.create_episode_writer(episode)
             elif command in ("success", "fail"):
