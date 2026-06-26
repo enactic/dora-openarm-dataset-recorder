@@ -29,6 +29,11 @@ dev = [
   "ruff == 0.14.11", # sync with .pre-commit-config.yaml
 ]
 
+[project.optional-dependencies]
+ker = [
+  "openarm-ker"
+]
+
 [project.scripts]
 dora-openarm-dataset-recorder = "dora_openarm_dataset_recorder.main:main"
 

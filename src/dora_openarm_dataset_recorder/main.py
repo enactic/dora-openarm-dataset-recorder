@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """Node to record data from OpenArm and cameras as OpenArm dataset."""
+from cmath import e
 
 import argparse
 from dataclasses import dataclass, field
@@ -28,6 +29,10 @@ from numpy.typing import ArrayLike
 import shutil
 import yaml
 
+try:
+    from openarm_ker.ker_stream import KERStream
+except ImportError:
+    KERStream = None
 
 @dataclass
 class Episode:
