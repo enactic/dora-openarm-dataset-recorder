@@ -13,13 +13,13 @@
 # limitations under the License.
 
 """Node to record data from OpenArm and cameras as OpenArm dataset."""
-from cmath import e
 
 import argparse
 from dataclasses import dataclass, field
 import datetime
 import copy
 import dora
+import json
 import os
 import pathlib
 import pyarrow as pa
@@ -29,10 +29,6 @@ from numpy.typing import ArrayLike
 import shutil
 import yaml
 
-try:
-    from openarm_ker.ker_stream import KERStream
-except ImportError:
-    KERStream = None
 
 @dataclass
 class Episode:
@@ -208,6 +204,13 @@ class DatasetWriter:
         )
         self._write_metadata_file()
 
+    def set_leader_ker_metadata(self, ker_metadata):
+        """Record KER leader device metadata under equipment.leader.ker."""
+        equipment = self._metadata.setdefault("equipment", {})
+        leader = equipment.setdefault("leader", {})
+        leader["ker"] = ker_metadata
+        self._write_metadata_file()
+
     def _write_metadata_file(self):
         metadata = copy.deepcopy(self._metadata)
         metadata["version"] = self._VERSION
@@ -268,7 +271,8 @@ def _collect_dynamic_metadata(metadata, args, node):
             metadata["equipment"] = {}
         if "embodiments" not in metadata["equipment"]:
             metadata["equipment"]["embodiments"] = {}
-        # TODO: Set equipment.embodiments.ker here or in DatasetWriter.
+        # equipment.leader.ker is filled at runtime from the KER node's
+        # metadata reply (see main()'s "ker_metadata" handling).
     elif args.operation_type == "rollout":
         if "model" not in metadata:
             metadata["model"] = {}
@@ -348,6 +352,11 @@ def main():
     episode = None
     episode_writer = None
 
+    if args.operation_type == "teleop":
+        # Ask the KER leader node for its device metadata. The reply arrives
+        # as a "ker_metadata" event and is recorded under equipment.leader.ker.
+        node.send_output("request_metadata", pa.array([True]))
+
     for event in node:
         if event["type"] != "INPUT":
             continue
@@ -378,6 +387,13 @@ def main():
                     episode = None
                     episode_writer = None
                 break
+            continue
+
+        if event_id == "ker_metadata":
+            # KER leader device metadata (JSON) from the KER node. It may arrive
+            # before any episode starts, so handle it above the episode gate.
+            ker_metadata = json.loads(event["value"][0].as_py())
+            dataset_writer.set_leader_ker_metadata(ker_metadata)
             continue
 
         # Main process
