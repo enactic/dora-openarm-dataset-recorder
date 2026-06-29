@@ -352,11 +352,6 @@ def main():
     episode = None
     episode_writer = None
 
-    if args.operation_type == "teleop":
-        # Ask the KER leader node for its device metadata. The reply arrives
-        # as a "ker_metadata" event and is recorded under equipment.leader.ker.
-        node.send_output("request_metadata", pa.array([True]))
-
     for event in node:
         if event["type"] != "INPUT":
             continue
@@ -390,8 +385,7 @@ def main():
             continue
 
         if event_id == "ker_metadata":
-            # KER leader device metadata (JSON) from the KER node. It may arrive
-            # before any episode starts, so handle it above the episode gate.
+            # KER leader device metadata (JSON) from the KER node.
             ker_metadata = json.loads(event["value"][0].as_py())
             dataset_writer.set_leader_ker_metadata(ker_metadata)
             continue
