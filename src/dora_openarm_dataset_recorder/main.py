@@ -209,6 +209,7 @@ class DatasetWriter:
         equipment = self._metadata.setdefault("equipment", {})
         leader = equipment.setdefault("leader", {})
         ker = leader.setdefault("ker", {})
+        ker["id"] = "OpenArmKER"
         ker["firmware_version"] = ker_metadata.get("fw")
         ker["hardware_version"] = ker_metadata.get("hw")
         self._write_metadata_file()
