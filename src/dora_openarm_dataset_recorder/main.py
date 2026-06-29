@@ -208,7 +208,9 @@ class DatasetWriter:
         """Record KER leader device metadata under equipment.leader.ker."""
         equipment = self._metadata.setdefault("equipment", {})
         leader = equipment.setdefault("leader", {})
-        leader["ker"] = ker_metadata
+        ker = leader.setdefault("ker", {})
+        ker["firmware_version"] = ker_metadata.get("fw")
+        ker["hardware_version"] = ker_metadata.get("hw")
         self._write_metadata_file()
 
     def _write_metadata_file(self):
