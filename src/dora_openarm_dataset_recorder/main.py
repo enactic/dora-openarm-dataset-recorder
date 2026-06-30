@@ -66,39 +66,44 @@ class EpisodeWriter:
         output_path = self._base_directory / "cameras" / name / f"{timestamp}.{format}"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("wb") as output:
-            # Using pa.PythonFile here is for zero-copy. We can't
-            # write pa.Buffer data to Python's IO directory. If we use
-            # Python's IO, we need to copy data in pa.Buffer as
-            # Python's bytes. We want to avoid it.
             with pa.PythonFile(output) as pa_output:
                 pa_output.write(image.buffers()[1])
 
     def finish(self):
         """Write all pending data."""
+        # ── Right Arm Action ──
         if self._episode.right_actions:
-            self._write_positions(
-                self._base_directory / "action" / "arms" / "right" / "qpos.parquet",
+            self._write_arm(
+                self._base_directory / "action" / "arms" / "right",
                 self._episode.right_action_timestamps,
                 self._episode.right_actions,
             )
+
+        # ── Right Arm Observation ──
         if self._episode.right_observations:
-            self._write_observations(
+            self._write_arm(
                 self._base_directory / "obs" / "arms" / "right",
                 self._episode.right_observation_timestamps,
                 self._episode.right_observations,
             )
+
+        # ── Left Arm Action ──
         if self._episode.left_actions:
-            self._write_positions(
-                self._base_directory / "action" / "arms" / "left" / "qpos.parquet",
+            self._write_arm(
+                self._base_directory / "action" / "arms" / "left",
                 self._episode.left_action_timestamps,
                 self._episode.left_actions,
             )
+
+        # ── Left Arm Observation ──
         if self._episode.left_observations:
-            self._write_observations(
+            self._write_arm(
                 self._base_directory / "obs" / "arms" / "left",
                 self._episode.left_observation_timestamps,
                 self._episode.left_observations,
             )
+
+        # ── Elevation Lifter ──
         if self._episode.elevation_actions:
             self._write_positions(
                 self._base_directory / "action" / "lifter" / "elevation.parquet",
@@ -142,14 +147,30 @@ class EpisodeWriter:
         )
         pq.write_table(table, output_path)
 
-    def _write_observations(self, base_path, timestamps, observations):
-        first = observations[0]
-        if isinstance(first, pa.StructArray):
-            output_path = base_path / "state.parquet"
-            self._write_states(output_path, timestamps, observations)
+    def _write_arm(self, base_path, timestamps, entries):
+        base_path.mkdir(parents=True, exist_ok=True)
+        first = entries[0]
+        if not isinstance(first, pa.StructArray):
+            self._write_positions(base_path / "qpos.parquet", timestamps, entries)
+            return
+        field_names = [f.name for f in first.type]
+        if "qpos" in field_names:
+            self._write_states(base_path / "state.parquet", timestamps, entries)
         else:
-            output_path = base_path / "qpos.parquet"
-            self._write_positions(output_path, timestamps, observations)
+            list_type = pa.list_(pa.float32())
+            for field_name in field_names:
+                pq.write_table(
+                    pa.table(
+                        {
+                            "timestamp": pa.array(timestamps, type=pa.timestamp("ns")),
+                            "value": pa.array(
+                                [e.field(field_name)[0].as_py() for e in entries],
+                                type=list_type,
+                            ),
+                        }
+                    ),
+                    base_path / f"{field_name}.parquet",
+                )
 
 
 class DatasetWriter:
@@ -276,6 +297,7 @@ def _collect_dynamic_metadata(metadata, args, node):
             metadata["equipment"]["embodiments"] = {}
         # equipment.leader.ker is filled at runtime from the KER node's
         # metadata reply (see main()'s "ker_metadata" handling).
+
     elif args.operation_type == "rollout":
         if "model" not in metadata:
             metadata["model"] = {}
@@ -297,13 +319,11 @@ def _collect_dynamic_metadata(metadata, args, node):
         if not frequency:
             continue
         if name.startswith("arm_"):
-            # arm_right_action -> right, action
             side, type = name.split("_")[1:3]
-            if type == "observation":
+            if type == "observation" or "obs" in type:
                 type = "obs"
             metadata["frequencies"][type]["arms"][side] = frequency
         elif name.startswith("camera_"):
-            # camera_wrist_right -> wrist_right
             camera_name = name.removeprefix("camera_")
             metadata["frequencies"]["cameras"][camera_name] = frequency
 
@@ -398,28 +418,25 @@ def main():
             continue
         timestamp = event["metadata"]["timestamp"]
         if isinstance(timestamp, datetime.datetime):
-            # Added by dora-rs automatically.
-            # Convert to POSIX timestamp in nanosecond.
             timestamp = math.ceil(timestamp.timestamp() * 1_000_000_000)
+
         if event_id.startswith("arm_"):
             value = event["value"]
             if isinstance(value, pa.StructArray) and "new_position" in value.type.names:
                 value = value.field("new_position")
 
-            # arm_right_action ->
-            # right_action
-            key_prefix = event_id.removeprefix("arm_")
-            # right_action ->
-            # right_actions
-            values_key = f"{key_prefix}s"
+            side = "right" if "right" in event_id else "left"
+            if "action" in event_id:
+                values_key = f"{side}_actions"
+                timestamps_key = f"{side}_action_timestamps"
+            else:
+                values_key = f"{side}_observations"
+                timestamps_key = f"{side}_observation_timestamps"
+
             getattr(episode, values_key).append(value)
-            # right_action ->
-            # right_action_timestamps
-            timestamps_key = f"{key_prefix}_timestamps"
             getattr(episode, timestamps_key).append(timestamp)
+
         elif event_id.startswith("elevation_"):
-            # elevation_observation -> elevation_observations, elevation_observation_timestamps
-            # elevation_action -> elevation_actions, elevation_action_timestamps
             getattr(episode, f"{event_id}s").append(event["value"])
             getattr(episode, f"{event_id}_timestamps").append(timestamp)
         elif event_id.startswith("camera_"):
