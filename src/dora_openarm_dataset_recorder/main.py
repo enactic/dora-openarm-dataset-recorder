@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 import datetime
 import copy
 import dora
+import json
 import os
 import pathlib
 import pyarrow as pa
@@ -204,6 +205,16 @@ class DatasetWriter:
         )
         self._write_metadata_file()
 
+    def set_leader_ker_metadata(self, ker_metadata):
+        """Record KER leader device metadata under equipment.leader.ker."""
+        equipment = self._metadata.setdefault("equipment", {})
+        leader = equipment.setdefault("leader", {})
+        ker = leader.setdefault("ker", {})
+        ker["id"] = "OpenArmKER"
+        ker["firmware_version"] = ker_metadata.get("fw")
+        ker["hardware_version"] = ker_metadata.get("hw")
+        self._write_metadata_file()
+
     def _write_metadata_file(self):
         metadata = copy.deepcopy(self._metadata)
         metadata["version"] = self._VERSION
@@ -264,7 +275,8 @@ def _collect_dynamic_metadata(metadata, args, node):
             metadata["equipment"] = {}
         if "embodiments" not in metadata["equipment"]:
             metadata["equipment"]["embodiments"] = {}
-        # TODO: Set equipment.embodiments.ker here or in DatasetWriter.
+        # equipment.leader.ker is filled at runtime from the KER node's
+        # metadata reply (see main()'s "ker_metadata" handling).
     elif args.operation_type == "rollout":
         if "model" not in metadata:
             metadata["model"] = {}
@@ -374,6 +386,12 @@ def main():
                     episode = None
                     episode_writer = None
                 break
+            continue
+
+        if event_id == "ker_metadata":
+            # KER leader device metadata (JSON) from the KER node.
+            ker_metadata = json.loads(event["value"][0].as_py())
+            dataset_writer.set_leader_ker_metadata(ker_metadata)
             continue
 
         # Main process
