@@ -52,6 +52,20 @@ class Episode:
     elevation_observations: ArrayLike = field(default_factory=list)
 
 
+def _flat_field(struct_array, field_name):
+    """Read a struct field as a flat array of one row's values.
+
+    Arm values come in two struct layouts: struct-of-arrays where each
+    field is already a flat array (e.g. dora-openarm's "state"), and a
+    length-1 struct with list fields like [{"qpos": [...]}] (e.g.
+    dora-openarm-ker's "follower_position_*").
+    """
+    values = struct_array.field(field_name)
+    if pa.types.is_list(values.type):
+        values = values[0].values
+    return values
+
+
 class EpisodeWriter:
     """Writer an episode."""
 
@@ -136,13 +150,19 @@ class EpisodeWriter:
 
         if isinstance(first, pa.StructArray):
             field_names = first.type.names
-            avaliable_fields = ["qpos", "qvel", "qtorque", "pose"] # currently only support these fields
+            avaliable_fields = [
+                "qpos",
+                "qvel",
+                "qtorque",
+                "pose",
+            ]  # currently only support these fields
             save_dict = {"timestamp": pa.array(timestamps, type=pa.timestamp("ns"))}
             for field_name in field_names:
                 if field_name not in avaliable_fields:
                     continue
                 save_dict[field_name] = pa.array(
-                    [s.field(field_name) for s in observations], type=list_type
+                    [_flat_field(s, field_name) for s in observations],
+                    type=list_type,
                 )
             table = pa.table(save_dict)
         else:
