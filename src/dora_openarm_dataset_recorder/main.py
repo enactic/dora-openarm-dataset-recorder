@@ -136,8 +136,11 @@ class EpisodeWriter:
 
         if isinstance(first, pa.StructArray):
             field_names = first.type.names
+            avaliable_fields = ["qpos", "qvel", "qtorque", "pose"] # currently only support these fields
             save_dict = {"timestamp": pa.array(timestamps, type=pa.timestamp("ns"))}
             for field_name in field_names:
+                if field_name not in avaliable_fields:
+                    continue
                 save_dict[field_name] = pa.array(
                     [s.field(field_name) for s in observations], type=list_type
                 )
