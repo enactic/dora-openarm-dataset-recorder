@@ -141,12 +141,12 @@ class EpisodeWriter:
         )
         pq.write_table(table, output_path)
 
-    def _write_kinematic_state(self, base_path, timestamps, observations):
+    def _write_kinematic_state(self, base_path, timestamps, states):
         output_path = base_path / "state.parquet"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         list_type = pa.list_(pa.float32())
-        first = observations[0]
+        first = states[0]
 
         if isinstance(first, pa.StructArray):
             field_names = first.type.names
@@ -161,7 +161,7 @@ class EpisodeWriter:
                 if field_name not in avaliable_fields:
                     continue
                 save_dict[field_name] = pa.array(
-                    [_flat_field(s, field_name) for s in observations],
+                    [_flat_field(s, field_name) for s in states],
                     type=list_type,
                 )
             table = pa.table(save_dict)
@@ -170,7 +170,7 @@ class EpisodeWriter:
             table = pa.table(
                 {
                     "timestamp": pa.array(timestamps, type=pa.timestamp("ns")),
-                    "qpos": pa.array(observations, type=list_type),
+                    "qpos": pa.array(states, type=list_type),
                 }
             )
         pq.write_table(table, output_path)
