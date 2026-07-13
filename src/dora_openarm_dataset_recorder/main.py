@@ -24,6 +24,7 @@ import os
 import pathlib
 import pyarrow as pa
 import pyarrow.parquet as pq
+import numpy as np
 import math
 from numpy.typing import ArrayLike
 import shutil
@@ -52,18 +53,11 @@ class Episode:
     elevation_observations: ArrayLike = field(default_factory=list)
 
 
-def _flat_field(struct_array, field_name):
-    """Read a struct field as a flat array of one row's values.
-
-    Arm values come in two struct layouts: struct-of-arrays where each
-    field is already a flat array (e.g. dora-openarm's "state"), and a
-    length-1 struct with list fields like [{"qpos": [...]}] (e.g.
-    dora-openarm-ker's "follower_position_*").
-    """
-    values = struct_array.field(field_name)
-    if pa.types.is_list(values.type):
-        values = values[0].values
-    return values
+def extract_values(value: pa.Array, key: str) -> np.ndarray:
+    """Read `key` from a length-1 StructArray, or a flat array as-is."""
+    if pa.types.is_struct(value.type):
+        value = value.field(key)[0].values
+    return np.array(value, dtype=np.float32)
 
 
 class EpisodeWriter:
@@ -150,21 +144,21 @@ class EpisodeWriter:
 
         if isinstance(first, pa.StructArray):
             field_names = first.type.names
-            avaliable_fields = [
+            available_field_names = [
                 "qpos",
                 "qvel",
                 "qtorque",
                 "pose",
             ]  # currently only support these fields
-            save_dict = {"timestamp": pa.array(timestamps, type=pa.timestamp("ns"))}
+            state_fields = {"timestamp": pa.array(timestamps, type=pa.timestamp("ns"))}
             for field_name in field_names:
-                if field_name not in avaliable_fields:
+                if field_name not in available_field_names:
                     continue
-                save_dict[field_name] = pa.array(
-                    [_flat_field(s, field_name) for s in states],
+                state_fields[field_name] = pa.array(
+                    [extract_values(s, field_name) for s in states],
                     type=list_type,
                 )
-            table = pa.table(save_dict)
+            table = pa.table(state_fields)
         else:
             # if the observation is not a struct, it should be qpos.
             table = pa.table(
