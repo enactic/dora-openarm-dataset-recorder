@@ -24,6 +24,7 @@ import os
 import pathlib
 import pyarrow as pa
 import pyarrow.parquet as pq
+import numpy as np
 import math
 from numpy.typing import ArrayLike
 import shutil
@@ -52,6 +53,13 @@ class Episode:
     elevation_observations: ArrayLike = field(default_factory=list)
 
 
+def extract_values(value: pa.Array, key: str) -> np.ndarray:
+    """Read `key` from a length-1 StructArray, or a flat array as-is."""
+    if pa.types.is_struct(value.type):
+        value = value.field(key)[0].values
+    return np.array(value, dtype=np.float32)
+
+
 class EpisodeWriter:
     """Writer an episode."""
 
@@ -76,25 +84,25 @@ class EpisodeWriter:
     def finish(self):
         """Write all pending data."""
         if self._episode.right_actions:
-            self._write_positions(
-                self._base_directory / "action" / "arms" / "right" / "qpos.parquet",
+            self._write_kinematic_state(
+                self._base_directory / "action" / "arms" / "right",
                 self._episode.right_action_timestamps,
                 self._episode.right_actions,
             )
         if self._episode.right_observations:
-            self._write_observations(
+            self._write_kinematic_state(
                 self._base_directory / "obs" / "arms" / "right",
                 self._episode.right_observation_timestamps,
                 self._episode.right_observations,
             )
         if self._episode.left_actions:
-            self._write_positions(
-                self._base_directory / "action" / "arms" / "left" / "qpos.parquet",
+            self._write_kinematic_state(
+                self._base_directory / "action" / "arms" / "left",
                 self._episode.left_action_timestamps,
                 self._episode.left_actions,
             )
         if self._episode.left_observations:
-            self._write_observations(
+            self._write_kinematic_state(
                 self._base_directory / "obs" / "arms" / "left",
                 self._episode.left_observation_timestamps,
                 self._episode.left_observations,
@@ -127,29 +135,39 @@ class EpisodeWriter:
         )
         pq.write_table(table, output_path)
 
-    def _write_states(self, output_path, timestamps, states):
+    def _write_kinematic_state(self, base_path, timestamps, states):
+        output_path = base_path / "state.parquet"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        list_type = pa.list_(pa.float32())
-        table = pa.table(
-            {
-                "timestamp": pa.array(timestamps, type=pa.timestamp("ns")),
-                "qpos": pa.array([s.field("qpos") for s in states], type=list_type),
-                "qvel": pa.array([s.field("qvel") for s in states], type=list_type),
-                "qtorque": pa.array(
-                    [s.field("qtorque") for s in states], type=list_type
-                ),
-            }
-        )
-        pq.write_table(table, output_path)
 
-    def _write_observations(self, base_path, timestamps, observations):
-        first = observations[0]
+        list_type = pa.list_(pa.float32())
+        first = states[0]
+
         if isinstance(first, pa.StructArray):
-            output_path = base_path / "state.parquet"
-            self._write_states(output_path, timestamps, observations)
+            field_names = first.type.names
+            available_field_names = [
+                "qpos",
+                "qvel",
+                "qtorque",
+                "pose",
+            ]  # currently only support these fields
+            state_fields = {"timestamp": pa.array(timestamps, type=pa.timestamp("ns"))}
+            for field_name in field_names:
+                if field_name not in available_field_names:
+                    continue
+                state_fields[field_name] = pa.array(
+                    [extract_values(s, field_name) for s in states],
+                    type=list_type,
+                )
+            table = pa.table(state_fields)
         else:
-            output_path = base_path / "qpos.parquet"
-            self._write_positions(output_path, timestamps, observations)
+            # if the observation is not a struct, it should be qpos.
+            table = pa.table(
+                {
+                    "timestamp": pa.array(timestamps, type=pa.timestamp("ns")),
+                    "qpos": pa.array(states, type=list_type),
+                }
+            )
+        pq.write_table(table, output_path)
 
 
 class DatasetWriter:
