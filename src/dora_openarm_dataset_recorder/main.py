@@ -53,6 +53,10 @@ class Episode:
     elevation_observations: ArrayLike = field(default_factory=list)
 
 
+# Attributes that may appear as columns in a state.parquet file.
+STATE_ATTRIBUTES = ("qpos", "qvel", "qtorque", "pose")
+
+
 def extract_values(value: pa.Array, key: str) -> np.ndarray:
     """Read `key` from a length-1 StructArray, or a flat array as-is."""
     if pa.types.is_struct(value.type):
@@ -82,30 +86,46 @@ class EpisodeWriter:
                 pa_output.write(image.buffers()[1])
 
     def finish(self):
-        """Write all pending data."""
+        """Write all pending data.
+
+        Returns:
+            Attribute names recorded in state.parquet files as
+            {type: {embodiment: {component: [attribute, ...]}}}, e.g.
+            {"obs": {"arms": {"right": ["qpos", "qvel", "qtorque"]}}}.
+
+        """
+        attributes = {}
         if self._episode.right_actions:
-            self._write_kinematic_state(
-                self._base_directory / "action" / "arms" / "right",
-                self._episode.right_action_timestamps,
-                self._episode.right_actions,
+            attributes.setdefault("action", {}).setdefault("arms", {})["right"] = (
+                self._write_kinematic_state(
+                    self._base_directory / "action" / "arms" / "right",
+                    self._episode.right_action_timestamps,
+                    self._episode.right_actions,
+                )
             )
         if self._episode.right_observations:
-            self._write_kinematic_state(
-                self._base_directory / "obs" / "arms" / "right",
-                self._episode.right_observation_timestamps,
-                self._episode.right_observations,
+            attributes.setdefault("obs", {}).setdefault("arms", {})["right"] = (
+                self._write_kinematic_state(
+                    self._base_directory / "obs" / "arms" / "right",
+                    self._episode.right_observation_timestamps,
+                    self._episode.right_observations,
+                )
             )
         if self._episode.left_actions:
-            self._write_kinematic_state(
-                self._base_directory / "action" / "arms" / "left",
-                self._episode.left_action_timestamps,
-                self._episode.left_actions,
+            attributes.setdefault("action", {}).setdefault("arms", {})["left"] = (
+                self._write_kinematic_state(
+                    self._base_directory / "action" / "arms" / "left",
+                    self._episode.left_action_timestamps,
+                    self._episode.left_actions,
+                )
             )
         if self._episode.left_observations:
-            self._write_kinematic_state(
-                self._base_directory / "obs" / "arms" / "left",
-                self._episode.left_observation_timestamps,
-                self._episode.left_observations,
+            attributes.setdefault("obs", {}).setdefault("arms", {})["left"] = (
+                self._write_kinematic_state(
+                    self._base_directory / "obs" / "arms" / "left",
+                    self._episode.left_observation_timestamps,
+                    self._episode.left_observations,
+                )
             )
         if self._episode.elevation_actions:
             self._write_positions(
@@ -119,6 +139,7 @@ class EpisodeWriter:
                 self._episode.elevation_observation_timestamps,
                 self._episode.elevation_observations,
             )
+        return attributes
 
     def cancel(self):
         """Cancel this episode."""
@@ -144,15 +165,9 @@ class EpisodeWriter:
 
         if isinstance(first, pa.StructArray):
             field_names = first.type.names
-            available_field_names = [
-                "qpos",
-                "qvel",
-                "qtorque",
-                "pose",
-            ]  # currently only support these fields
             state_fields = {"timestamp": pa.array(timestamps, type=pa.timestamp("ns"))}
             for field_name in field_names:
-                if field_name not in available_field_names:
+                if field_name not in STATE_ATTRIBUTES:
                     continue
                 state_fields[field_name] = pa.array(
                     [extract_values(s, field_name) for s in states],
@@ -168,12 +183,13 @@ class EpisodeWriter:
                 }
             )
         pq.write_table(table, output_path)
+        return [name for name in table.column_names if name != "timestamp"]
 
 
 class DatasetWriter:
     """Write a dataset."""
 
-    _VERSION = "0.3.0"
+    _VERSION = "0.4.0"
 
     def __init__(self, directory, name, metadata):
         """Initialize variables."""
@@ -211,8 +227,16 @@ class DatasetWriter:
             raise ValueError(f"Episode directory already exists: {episode_directory}")
         return EpisodeWriter(self._base_directory, episode)
 
-    def finish_episode(self, episode):
-        """Add a finished episode to the writer."""
+    def finish_episode(self, episode, attributes=None):
+        """Add a finished episode to the writer.
+
+        Args:
+            episode: The finished episode.
+            attributes: Attribute names recorded in the episode's
+                state.parquet files, as returned by EpisodeWriter.finish().
+
+        """
+        self._merge_attributes(attributes)
         self._episode_results.append(
             dict(
                 id=str(episode.number),
@@ -221,6 +245,23 @@ class DatasetWriter:
             )
         )
         self._write_metadata_file()
+
+    def _merge_attributes(self, attributes):
+        if not attributes:
+            return
+        merged = self._metadata.setdefault("attributes", {})
+        for type_, embodiments in attributes.items():
+            merged_embodiments = merged.setdefault(type_, {})
+            for embodiment_name, components in embodiments.items():
+                merged_components = merged_embodiments.setdefault(embodiment_name, {})
+                for component, names in components.items():
+                    union = set(merged_components.get(component, [])) | set(names)
+                    # Keep the canonical state.parquet column order.
+                    # Unknown names may come from a dataset recorded by a
+                    # newer recorder; keep them instead of dropping.
+                    merged_components[component] = [
+                        name for name in STATE_ATTRIBUTES if name in union
+                    ] + sorted(union - set(STATE_ATTRIBUTES))
 
     def set_leader_ker_metadata(self, ker_metadata):
         """Record KER leader device metadata under equipment.leader.ker."""
@@ -247,6 +288,10 @@ class DatasetWriter:
         with open(metadata_path, encoding="utf-8") as f:
             existing_metadata = yaml.safe_load(f) or {}
         self._episode_results = existing_metadata.get("episodes", [])
+        # Carry over attributes recorded by previous runs so that
+        # continuous recording keeps them.
+        if "attributes" in existing_metadata:
+            self._metadata["attributes"] = existing_metadata["attributes"]
         return existing_metadata
 
 
@@ -388,8 +433,8 @@ def main():
             elif command in ("success", "fail"):
                 if command == "success":
                     episode.success = True
-                episode_writer.finish()
-                dataset_writer.finish_episode(episode)
+                attributes = episode_writer.finish()
+                dataset_writer.finish_episode(episode, attributes)
                 episode = None
                 episode_writer = None
             elif command == "cancel":
@@ -398,8 +443,8 @@ def main():
                 episode_writer = None
             elif command == "quit":
                 if episode is not None:
-                    episode_writer.finish()
-                    dataset_writer.finish_episode(episode)
+                    attributes = episode_writer.finish()
+                    dataset_writer.finish_episode(episode, attributes)
                     episode = None
                     episode_writer = None
                 break
