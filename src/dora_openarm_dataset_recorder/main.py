@@ -415,6 +415,8 @@ def main():
         if episode is None:
             continue
         timestamp = event["metadata"]["timestamp"]
+        if event_id in ("arm_right_observation", "arm_left_observation"):
+            timestamp = event["metadata"].get("observation_timestamp", timestamp)
         if isinstance(timestamp, datetime.datetime):
             # Added by dora-rs automatically.
             # Convert to POSIX timestamp in nanosecond.
