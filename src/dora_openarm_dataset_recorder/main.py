@@ -372,6 +372,7 @@ def main():
     dataset_writer = DatasetWriter(args.directory, args.name, metadata)
     episode = None
     episode_writer = None
+    arm_observation_timestamp_key = None
 
     for event in node:
         if event["type"] != "INPUT":
@@ -411,12 +412,28 @@ def main():
             dataset_writer.set_leader_ker_metadata(ker_metadata)
             continue
 
+        timestamp_key = "timestamp"
+        if event_id in ("arm_right_observation", "arm_left_observation"):
+            if arm_observation_timestamp_key is None:
+                arm_observation_timestamp_key = (
+                    "observation_timestamp"
+                    if "observation_timestamp" in event["metadata"]
+                    else "timestamp"
+                )
+                print(
+                    f"Arm observation timestamp field: {arm_observation_timestamp_key}",
+                    flush=True,
+                )
+            timestamp_key = arm_observation_timestamp_key
+            if timestamp_key not in event["metadata"]:
+                raise ValueError(
+                    f"{event_id} is missing locked timestamp field {timestamp_key!r}"
+                )
+
         # Main process
         if episode is None:
             continue
-        timestamp = event["metadata"]["timestamp"]
-        if event_id in ("arm_right_observation", "arm_left_observation"):
-            timestamp = event["metadata"].get("observation_timestamp", timestamp)
+        timestamp = event["metadata"][timestamp_key]
         if isinstance(timestamp, datetime.datetime):
             # Added by dora-rs automatically.
             # Convert to POSIX timestamp in nanosecond.

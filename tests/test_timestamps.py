@@ -38,22 +38,32 @@ class FakeNode:
 
 
 @pytest.fixture
-def record_event(monkeypatch, tmp_path):
+def run_events(monkeypatch, tmp_path):
     monkeypatch.delenv("METADATA_FILE", raising=False)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "recorder",
-            "--directory",
-            str(tmp_path),
-            "--name",
-            "dataset",
-            "--operation-type",
-            "teleop",
-        ],
-    )
 
+    def run(events, name="dataset"):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "recorder",
+                "--directory",
+                str(tmp_path),
+                "--name",
+                name,
+                "--operation-type",
+                "teleop",
+            ],
+        )
+        monkeypatch.setattr(recorder.dora, "Node", lambda: FakeNode(events))
+        recorder.main()
+        return tmp_path / name / "episodes"
+
+    return run
+
+
+@pytest.fixture
+def record_event(run_events):
     def record(event_id, value, metadata):
         events = [
             {
@@ -70,9 +80,7 @@ def record_event(monkeypatch, tmp_path):
                 "metadata": {},
             },
         ]
-        monkeypatch.setattr(recorder.dora, "Node", lambda: FakeNode(events))
-        recorder.main()
-        return tmp_path / "dataset" / "episodes" / "0"
+        return run_events(events) / "0"
 
     return record
 
@@ -148,3 +156,148 @@ def test_camera_keeps_message_timestamp(record_event):
     directory = episode / "cameras" / "head"
     assert [path.name for path in directory.iterdir()] == [f"{MESSAGE_NS}.jpg"]
     assert (directory / f"{MESSAGE_NS}.jpg").read_bytes() == bytes([1, 2])
+
+
+def command(name, number=0):
+    return {
+        "type": "INPUT",
+        "id": "command",
+        "value": pa.array([name]),
+        "metadata": {"episode_number": number},
+    }
+
+
+def observation(side, snapshot=True):
+    metadata = {"timestamp": MESSAGE_NS}
+    if snapshot:
+        metadata["observation_timestamp"] = OBSERVATION_NS
+    return {
+        "type": "INPUT",
+        "id": f"arm_{side}_observation",
+        "value": pa.array([0.25], type=pa.float32()),
+        "metadata": metadata,
+    }
+
+
+@pytest.mark.parametrize("first_side", ["left", "right"])
+@pytest.mark.parametrize("snapshot", [False, True])
+def test_first_observation_locks_both_arms_before_recording(
+    run_events, capsys, first_side, snapshot
+):
+    episodes = run_events(
+        [
+            observation(first_side, snapshot),
+            command("start"),
+            observation("left"),
+            observation("right"),
+            command("success"),
+        ]
+    )
+    expected = OBSERVATION_NS if snapshot else MESSAGE_NS
+    for side in ("left", "right"):
+        table = pq.read_table(episodes / "0" / "obs" / "arms" / side / "state.parquet")
+        assert table["timestamp"].cast(pa.int64()).to_pylist() == [expected]
+    field = "observation_timestamp" if snapshot else "timestamp"
+    assert capsys.readouterr().out == f"Arm observation timestamp field: {field}\n"
+
+
+@pytest.mark.parametrize("side", ["left", "right"])
+@pytest.mark.parametrize("recording", [False, True])
+def test_missing_locked_field_fails_even_when_not_recording(
+    run_events, side, recording
+):
+    events = [observation("left")]
+    if recording:
+        events.append(command("start"))
+    events.append(observation(side, snapshot=False))
+    with pytest.raises(
+        ValueError,
+        match=f"arm_{side}_observation.*locked timestamp field 'observation_timestamp'",
+    ):
+        run_events(events)
+
+
+@pytest.mark.parametrize("end_command", ["success", "fail", "cancel"])
+@pytest.mark.parametrize("snapshot", [False, True])
+def test_timestamp_selection_survives_episode_changes(
+    run_events, end_command, snapshot
+):
+    events = [
+        command("start"),
+        observation("left", snapshot),
+        # Camera output creates the episode directory before cancellation.
+        {
+            "type": "INPUT",
+            "id": "camera_head",
+            "value": pa.array([1, 2], type=pa.uint8()),
+            "metadata": {"timestamp": MESSAGE_NS, "encoding": "jpg"},
+        },
+        command(end_command),
+        command("start", 1),
+        observation("right", snapshot=not snapshot),
+        command("success"),
+    ]
+    if snapshot:
+        with pytest.raises(
+            ValueError, match="locked timestamp field 'observation_timestamp'"
+        ):
+            run_events(events)
+    else:
+        episodes = run_events(events)
+        table = pq.read_table(
+            episodes / "1" / "obs" / "arms" / "right" / "state.parquet"
+        )
+        assert table["timestamp"].cast(pa.int64()).to_pylist() == [MESSAGE_NS]
+
+
+def test_new_process_can_select_a_different_field(run_events, capsys):
+    run_events([observation("left", snapshot=False), command("quit")], name="first")
+    episodes = run_events(
+        [command("start"), observation("right"), command("success")], name="second"
+    )
+    table = pq.read_table(episodes / "0" / "obs" / "arms" / "right" / "state.parquet")
+    assert table["timestamp"].cast(pa.int64()).to_pylist() == [OBSERVATION_NS]
+    assert capsys.readouterr().out.splitlines() == [
+        "Arm observation timestamp field: timestamp",
+        "Arm observation timestamp field: observation_timestamp",
+    ]
+
+
+def test_locked_arm_field_does_not_affect_other_inputs(run_events):
+    outputs = {
+        "arm_left_action": "action/arms/left/state.parquet",
+        "arm_right_action": "action/arms/right/state.parquet",
+        "elevation_action": "action/lifter/elevation.parquet",
+        "elevation_observation": "obs/lifter/elevation.parquet",
+    }
+    events = [observation("left"), command("start")]
+    for event_id in outputs:
+        events.append(
+            {
+                "type": "INPUT",
+                "id": event_id,
+                "value": pa.array([0.25], type=pa.float32()),
+                "metadata": {
+                    "timestamp": MESSAGE_NS,
+                    "observation_timestamp": OBSERVATION_NS,
+                },
+            }
+        )
+    events.append(
+        {
+            "type": "INPUT",
+            "id": "camera_head",
+            "value": pa.array([1, 2], type=pa.uint8()),
+            "metadata": {
+                "timestamp": MESSAGE_NS,
+                "observation_timestamp": OBSERVATION_NS,
+                "encoding": "jpg",
+            },
+        }
+    )
+    events.append(command("success"))
+    episode = run_events(events) / "0"
+    for path in outputs.values():
+        table = pq.read_table(episode / path)
+        assert table["timestamp"].cast(pa.int64()).to_pylist() == [MESSAGE_NS]
+    assert (episode / "cameras" / "head" / f"{MESSAGE_NS}.jpg").is_file()
