@@ -27,7 +27,9 @@ import pyarrow.parquet as pq
 import numpy as np
 import math
 from numpy.typing import ArrayLike
+import queue
 import shutil
+import threading
 import yaml
 
 
@@ -285,6 +287,46 @@ class FrequencyDetector:
                 return self.detect(next_input)
 
 
+class EventReader:
+    """Read events from a node on a background thread.
+
+    Writing an episode blocks the main loop for a while. If nobody reads
+    the node meanwhile, its event channel fills up and dora drops the
+    inputs that arrive, including the next `start` command. This keeps
+    reading and queues the events in the order they arrived.
+    """
+
+    _END = object()
+
+    def __init__(self, node):
+        """Start reading events from the given node."""
+        self._events = queue.Queue()
+        self._error = None
+        self._thread = threading.Thread(
+            target=self._read, args=(node,), name="event-reader", daemon=True
+        )
+        self._thread.start()
+
+    def __iter__(self):
+        """Yield the read events until the node has no more events."""
+        while True:
+            event = self._events.get()
+            if event is self._END:
+                break
+            yield event
+        if self._error is not None:
+            raise self._error
+
+    def _read(self, node):
+        try:
+            for event in node:
+                self._events.put(event)
+        except BaseException as error:
+            self._error = error
+        finally:
+            self._events.put(self._END)
+
+
 def _collect_dynamic_metadata(metadata, args, node):
     metadata["operation_type"] = args.operation_type
     if args.operation_type == "teleop":
@@ -374,7 +416,7 @@ def main():
     episode_writer = None
     arm_observation_timestamp_key = None
 
-    for event in node:
+    for event in EventReader(node):
         if event["type"] != "INPUT":
             continue
 
@@ -386,6 +428,8 @@ def main():
                 episode.number = event["metadata"].get("episode_number", 0)
                 episode.task_index = event["metadata"].get("task_index", 0)
                 episode_writer = dataset_writer.create_episode_writer(episode)
+            elif command in ("success", "fail", "cancel") and episode is None:
+                print(f"Ignored {command}: no episode is being recorded", flush=True)
             elif command in ("success", "fail"):
                 if command == "success":
                     episode.success = True
