@@ -25,10 +25,10 @@ import dora_openarm_dataset_recorder.main as recorder
 
 class FakeNode:
     def __init__(self, events):
-        self.events = events
+        self.events = iter(events)
 
-    def __iter__(self):
-        return iter(self.events)
+    def next(self, timeout=None):
+        return next(self.events, None)
 
     def dataflow_descriptor(self):
         return {"nodes": []}
