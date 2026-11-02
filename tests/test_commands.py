@@ -120,6 +120,30 @@ def test_events_are_read_while_episode_is_written(run_node, monkeypatch):
     ]
 
 
+def test_quit_waits_until_the_node_has_no_more_events(run_node):
+    class SlowNode(FakeNode):
+        def __iter__(self):
+            for event in super().__iter__():
+                yield event
+                if event["value"].to_pylist() == ["quit"]:
+                    # Like dora, the stream ends a moment after quit.
+                    threading.Event().wait(0.2)
+
+    node = SlowNode(
+        [
+            command("start", episode_number=1),
+            command("quit"),
+            command("start", episode_number=2),
+            command("success"),
+        ]
+    )
+    episodes = run_node(node)
+    # The reader thread must be done before main() returns.
+    assert node.read == len(node.events)
+    assert not any(t.name == "event-reader" for t in threading.enumerate())
+    assert episodes == [{"id": "1", "success": False, "task_index": 0}]
+
+
 def test_event_reader_raises_node_error():
     class BrokenNode:
         def __iter__(self):

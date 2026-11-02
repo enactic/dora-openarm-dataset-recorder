@@ -415,9 +415,10 @@ def main():
     episode = None
     episode_writer = None
     arm_observation_timestamp_key = None
+    quitting = False
 
     for event in EventReader(node):
-        if event["type"] != "INPUT":
+        if quitting or event["type"] != "INPUT":
             continue
 
         event_id = event["id"]
@@ -447,7 +448,10 @@ def main():
                     dataset_writer.finish_episode(episode)
                     episode = None
                     episode_writer = None
-                break
+                # Don't break: returning now would shut Python down while
+                # the reader thread is still inside the node, which crashes
+                # with SIGSEGV. Ignore the rest until dora ends the stream.
+                quitting = True
             continue
 
         if event_id == "ker_metadata":
