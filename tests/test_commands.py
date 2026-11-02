@@ -14,6 +14,7 @@
 
 import sys
 import threading
+import time
 
 import pyarrow as pa
 import pytest
@@ -27,10 +28,12 @@ class FakeNode:
         self.events = events
         self.read = 0
 
-    def __iter__(self):
-        for event in self.events:
-            self.read += 1
-            yield event
+    def next(self, timeout=None):
+        if self.read == len(self.events):
+            return None
+        event = self.events[self.read]
+        self.read += 1
+        return event
 
     def dataflow_descriptor(self):
         return {"nodes": []}
@@ -120,13 +123,33 @@ def test_events_are_read_while_episode_is_written(run_node, monkeypatch):
     ]
 
 
-def test_event_reader_raises_node_error():
-    class BrokenNode:
-        def __iter__(self):
-            yield command("start")
-            raise RuntimeError("broken")
+def test_quit_stops_reading_events(run_node):
+    class EndlessNode(FakeNode):
+        def next(self, timeout=None):
+            event = super().next(timeout)
+            if event is not None:
+                return event
+            # Like dora when no input arrives in time while other nodes
+            # are still running.
+            time.sleep(timeout)
+            return {"type": "ERROR", "error": "Receiver timed out"}
 
-    reader = recorder.EventReader(BrokenNode())
+    episodes = run_node(
+        EndlessNode([command("start", episode_number=1), command("quit")])
+    )
+    assert not any(t.name == "event-reader" for t in threading.enumerate())
+    assert episodes == [{"id": "1", "success": False, "task_index": 0}]
+
+
+def test_event_reader_raises_node_error():
+    class BrokenNode(FakeNode):
+        def next(self, timeout=None):
+            event = super().next(timeout)
+            if event is None:
+                raise RuntimeError("broken")
+            return event
+
+    reader = recorder.EventReader(BrokenNode([command("start")]))
     events = iter(reader)
     assert next(events)["value"].to_pylist() == ["start"]
     with pytest.raises(RuntimeError, match="broken"):

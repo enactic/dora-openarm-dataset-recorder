@@ -294,14 +294,19 @@ class EventReader:
     the node meanwhile, its event channel fills up and dora drops the
     inputs that arrive, including the next `start` command. This keeps
     reading and queues the events in the order they arrived.
+
+    Call `finish()` before exiting. Python crashes with SIGSEGV if it
+    shuts down while the thread is still inside the node.
     """
 
     _END = object()
+    _TIMEOUT = 0.1
 
     def __init__(self, node):
         """Start reading events from the given node."""
         self._events = queue.Queue()
         self._error = None
+        self._finishing = threading.Event()
         self._thread = threading.Thread(
             target=self._read, args=(node,), name="event-reader", daemon=True
         )
@@ -317,9 +322,20 @@ class EventReader:
         if self._error is not None:
             raise self._error
 
+    def finish(self):
+        """Stop reading events and wait for the thread to end."""
+        self._finishing.set()
+        self._thread.join()
+
     def _read(self, node):
         try:
-            for event in node:
+            while not self._finishing.is_set():
+                # Wait with a timeout to check _finishing regularly. This
+                # returns an ERROR event on timeout; it's ignored like any
+                # other non-INPUT event.
+                event = node.next(timeout=self._TIMEOUT)
+                if event is None:
+                    break
                 self._events.put(event)
         except BaseException as error:
             self._error = error
@@ -412,11 +428,20 @@ def main():
             metadata = yaml.safe_load(f)
     _collect_dynamic_metadata(metadata, args, node)
     dataset_writer = DatasetWriter(args.directory, args.name, metadata)
+    event_reader = EventReader(node)
+    try:
+        _record_events(event_reader, dataset_writer)
+    finally:
+        event_reader.finish()
+
+
+def _record_events(event_reader, dataset_writer):
+    """Record events read by event_reader until they end or quit is received."""
     episode = None
     episode_writer = None
     arm_observation_timestamp_key = None
 
-    for event in EventReader(node):
+    for event in event_reader:
         if event["type"] != "INPUT":
             continue
 
