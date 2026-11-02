@@ -314,6 +314,8 @@ class EventReader:
             if event is self._END:
                 break
             yield event
+        # _END is queued just before the thread ends; wait for it to end.
+        self._thread.join()
         if self._error is not None:
             raise self._error
 
